@@ -6,11 +6,14 @@
     TP=2  --enable-expert-parallel
     UTIL=0.97  MAXLEN=8192  MAX_NUM_SEQS=1
     OFFLOAD_GB=45          # 26 of 42 MoE layers on host
-    SLOTS=46               # 46 of 144 EP-local experts resident per armed layer
+    SLOTS=52               # 52 of 144 EP-local experts resident per armed layer
     POLICY=lfu  DECAY=256  SPEC=off
     --max-num-batched-tokens 4096
+    --kv-cache-memory=644245094   # 0.6 GiB -> 15,753 tokens (MAXLEN 8192)
     GLM53_FASTPATH_PARTS=gate,topk,nodoublegate
     wide scratch ON
+
+Full recipe with every flag and patch explained: `docs/CONFIGURATION.md`.
 
 `fp_launch.sh` carries these as defaults.
 
@@ -18,7 +21,7 @@
 
 | metric            | session start | final  | change |
 |-------------------|---------------|--------|--------|
-| decode tok/s      | 10.96         | ~11.8  | +7%    |
+| decode tok/s      | 10.96         | ~13.1  | +20%   |
 | prefill @500      | 138.9         | 233.0  | +68%   |
 | prefill @1000     | 216.4         | 413.7  | +91%   |
 | prefill @2000     | 316.8         | 699.5  | +121%  |
@@ -92,7 +95,7 @@ Cost: 1.74 GiB of VRAM, paid by dropping SLOTS 56 -> 46, about 2.4 ms of decode.
 
 ## Closed by measurement — do not re-litigate
 
-Cache policy / decay / slots / algorithms (within 1.5% of the best online policy;
+Cache policy / decay / algorithms (within 1.5% of the best online policy;
 ~13pp below Belady regardless) · gather geometry (flat 86.6-90.6 ms) · lossless
 compression, both PCIe and VRAM-resident (Huffman decode cost 17x the transfer it
 saved; structural, not an implementation bug) · block dedup (zero duplicates) ·
@@ -105,3 +108,69 @@ METHODOLOGY #7).
 `expert_cache_fused_k` is built and exported but unused: it targets a hot/cold GEMM
 split that does not exist in this branch, and its prize (42 moe_align calls,
 437.8 us) is inside the noise floor.
+
+
+---
+
+## 5. Expert cache slots: 46 -> 52 (2026-09-17)
+
+**This section corrects an earlier claim.** "Slots" used to appear in the closed-by-
+measurement list above. That verdict was reached at a different operating point
+(OFFLOAD 76 / 42 layers armed) and does not hold at the current one:
+
+    config                  median   min     max     IQR    vs baseline
+    SLOTS=46                 79.50   78.64   83.13   1.30   --
+    SLOTS=52                 76.38   75.74   77.54   1.30   -3.13 ms
+    SLOTS=52 + KV cap        76.14   75.61   77.04   0.97   -3.36 ms  <- standing
+    SLOTS=58 + KV cap        80.08   74.58   85.97   5.16   UNSTABLE
+    SLOTS=60                 LAUNCH FAILED
+    SLOTS=64 + KV cap        ILLEGAL MEMORY ACCESS at engine init
+
+The 46 and 52 samples do not overlap (46's min 78.64 > 52's max 77.54), so this is not
+drift. Mechanism is the expected one: the gather is 15.43 ms/step driven by a 1.29
+misses/layer-step rate, and the gather is already at the PCIe wall (28.1 GB/s, verified
+three independent ways), so the only remaining lever is missing less often.
+
+The VRAM for those 6 slots comes from `--kv-cache-memory=644245094`: vLLM was holding
+2.52 GiB of KV where 0.6 GiB gives 15,753 tokens against a MAXLEN of 8192. Verified with
+a 4021-token prompt, not only short-answer gates.
+
+**The cache degrades above ~52 slots, and not gracefully.** 58 serves and is numerically
+correct but its timings are SCATTERED rather than drifting (81.77 76.36 76.91 80.20 77.30
+85.97 79.96 82.07 80.45 82.78 75.67 74.58). 60 will not launch. 64 dies with an illegal
+memory access, which is not what a clean OOM looks like. Isolated: SLOTS=52 with the
+identical KV cap is the tightest sample of the session (IQR 0.97, monotonic), so the KV
+cap is innocent and the slot count is the variable. Possible bug in vllm-expert-cache at
+high slot counts, worth chasing independently of performance.
+
+## 6. hostar: a host-staged all-reduce for PCIe-only GPUs (2026-09-17)
+
+Optional, off by default (`VLLM_HOSTAR=1`), worth a further ~3.5 ms/step.
+
+A GPU-to-GPU flag handshake in PEER VRAM does not work between these cards: writes land
+once a kernel ends, but a concurrently-spinning kernel stalls intermittently. Six
+store/load memory-ordering combinations all fail, and disabling PCIe ACS redirect changes
+nothing. The same handshake through PINNED HOST MEMORY runs 2000 round trips clean at
+4.5 us -- which is also what NCCL does for PCIe-only peers.
+
+Measured in-model (CUDA-graph trace, 19,928 hostar_k calls, 4/4 correctness):
+all-reduce **14.45 -> 10.94 ms/step**.
+
+Not the ~16 ms the microbenchmark implied, and the gap is the finding: per-call p50 is
+13.6 us but p90 is 405 us, and that tail is one rank spinning while the other catches up.
+Under expert parallelism the ranks route to different experts and do different amounts of
+gather work per layer. NCCL pays the same wait inside its 185.68 us average. **The
+remaining all-reduce time is load imbalance, not communication.**
+
+See `docs/HOSTAR-INTEGRATION.md` and `hostar/`.
+
+## Still open, ranked
+
+1. **mHC: 4.2 ms/step on ONE workgroup.** `dim3 grid(m_blocks)` in AITER's
+   `mhc_pre_big_fuse_rmsnorm` parallelises over tokens, and decode has exactly one, so
+   4.2 ms of work runs on 1 of 104 CUs. Needs a batch-1 variant parallelising over hidden
+   or residual streams. Largest clearly-wasteful item left.
+2. **Rank skew.** Now visible three ways: hostar's 405 us p90, 2.60 ms/step of
+   post-all-reduce idle, and the residual after replacing NCCL. Caused by data-dependent
+   expert routing, so not fixable by faster communication.
+3. Prefill numerical instability at temperature 0 (pre-existing, not from this work).
