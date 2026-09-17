@@ -174,3 +174,22 @@ See `docs/HOSTAR-INTEGRATION.md` and `hostar/`.
    post-all-reduce idle, and the residual after replacing NCCL. Caused by data-dependent
    expert routing, so not fixable by faster communication.
 3. Prefill numerical instability at temperature 0 (pre-existing, not from this work).
+
+
+## Speculative decoding (MTP): closed 2026-09-17
+
+Layer 45 IS a complete MTP draft layer -- but it shipped BF16 (14.87 GB, 7.43 GB/rank)
+while the model is W4A16 int4, so it cannot be resident and must be offloaded at ~400 MB
+of PCIe per draft step.
+
+It OOMs at the standing config, dies in CUDA graph capture at OFFLOAD=62/SLOTS=36, and in
+eager mode it SERVES but generates degenerate looping text (correctness 0/3). A control at
+the identical config with SPEC=off is clean, so MTP is the variable, not the cache or the
+offload level.
+
+Measured acceptance: mean length 1.17-1.77 (typically ~1.3), avg rate 17-77%. Break-even
+needs the MTP step under ~1.3x the base; the offloaded BF16 draft alone adds ~18%. Even
+with the verification bug fixed and the draft quantised to int4 (~1.95 GB/rank, would fit),
+this is break-even at best.
+
+Full detail, including what would have to be true to revisit: docs/SPECULATIVE-DECODING.md
