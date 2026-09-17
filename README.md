@@ -39,6 +39,7 @@ read nothing else, read rules 1 and 2:
     docs/HOSTAR-INTEGRATION.md        the all-reduce that DOES work: +5%, and why not more
     docs/PCIE-FINE-GRAIN-TRACE.md     HSA_FORCE_FINE_GRAIN_PCIE: no effect, and why
     docs/SPECULATIVE-DECODING.md      MTP runs and is not usable; the draft is BF16
+    docs/GEMMA4-31B.md                a model that FITS: 45.9 tok/s, and what it says about GLM
     hostar/                           host-staged all-reduce: kernel, plugin, build script
     LEDGER.md              the full experiment log, ~3000 lines, including dead ends
 

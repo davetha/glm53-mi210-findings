@@ -147,3 +147,10 @@ assert non-empty before believing a pass, and use `max_tokens >= 3000`.
   run at capture, so any hit rate read in graph mode is a cold-start artifact. Use
   `--enforce-eager` to measure miss rate.
 * **Check a trace is of the configuration you think it is** before reading anything off it.
+* **The box thermally throttles under sustained load, and IQR will not reveal it.** A
+  monotonically RISING sample series is a thermal signal, not noise: a single card driven
+  hard goes 79 -> 92 C junction and 238 -> 189 W, doubling decode time, then recovers on
+  idle. Check for monotonic rise before reporting a median; if present, report cold and
+  sustained separately. Cool ~60 s between arms. GLM-5.3 masks this because its step is
+  ~20% idle on PCIe so power stays low -- a flat GLM run does NOT mean the box is immune.
+  See docs/GEMMA4-31B.md.
