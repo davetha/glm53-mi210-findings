@@ -3137,3 +3137,46 @@ patched_sparse_attn_indexer_kpool.py. NOT INVESTIGATED; separate from this work.
    New gates, all default-on, all reversible without editing code:
      EXPERT_CACHE_WIDE_SCRATCH, EXPERT_CACHE_FUSED_REMAP,
      EXPERT_CACHE_DECLINE_RESIDENT, GLM53_TOPK_REGSTORE
+
+================================================================================
+STEP BUDGET MEASURED: the gather is 34%, not the whole story    2026-09-16
+================================================================================
+EXPERT_CACHE_NOGATHER=1 runs the manager but copies NO bytes -- output is
+deliberately wrong, timing is exact. Same container config otherwise
+(off45 / S46 / chunk 4096 / wide scratch / gate,topk,nodoublegate):
+
+     normal            80.12  80.19  80.52 ms   -> 12.44 tok/s
+     gather disabled   53.19  53.20  53.34 ms   -> 18.80 tok/s
+     => PCIe gather costs ~27 ms = 34% of the step
+        everything else            ~53 ms = 66%
+
+TWO CONSEQUENCES, both important:
+
+1. **53.2 ms is a MEASURED CEILING for all PCIe work combined.** Cache policy,
+   slot count, placement, bandwidth -- every lever in that direction, taken to
+   perfection, lands at 18.8 tok/s. Beyond that requires compute work. This is a
+   measurement, not an estimate, and it is the number to plan against.
+
+2. **The 66% has never been profiled under CUDA graphs.** Every rocprofv3 trace
+   this session was EAGER mode (profile_rocprof.sh passes --enforce-eager), which
+   distributes time completely differently -- the eager step measured 73.6 ms busy
+   against a 80 ms cudagraph step with a different composition entirely. So the
+   majority of the step is genuinely unexamined.
+
+PREDICTION vs MEASUREMENT GAP -- unresolved, and worth ~9 ms if it resolves one way.
+Predicted: 26 armed layers x 1.34 misses/layer-step (sim, S=46) x 12.375 MiB
+           = 431 MiB/step, at the 24 GB/s the link achieves = 18 ms.
+Measured:  27 ms. Implies either
+     (a) the in-model gather runs at ~16 GB/s where the standalone test gets 27
+         GB/s (tests/test_policy.py: 26.9 GB/s even on a small 8-expert gather,
+         so transfer size does NOT obviously explain it), or
+     (b) the real miss rate exceeds the simulation -- note the trace behind that
+         1.34 was taken when only 17 layers were armed; 26 are armed now, and the
+         per-layer hit rates vary 46-89%, so a 17-layer sample may not transfer.
+(a) is recoverable, ~9 ms. (b) means the bytes are real and there is nothing to
+claw back. Settle it with a fresh 26-layer trace + cache_sim.py before any work.
+
+RETRACTED, same session: I estimated PCIe at "~18 ms, 22% of the step" from the
+arithmetic above and framed compute as the obvious next target on that basis. The
+measurement says 27 ms / 34%. The conclusion survives -- 53 ms is still the
+majority -- but it was reached through a calculation that did not hold.

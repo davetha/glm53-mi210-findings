@@ -30,6 +30,11 @@ read nothing else, read rules 1 and 2:
     docs/RESULTS.md        final config, what produced each gain, what is closed
     docs/MODEL-SURVEY.md   is there a better model to run? (short answer: no)
     docs/OPEN-ISSUES.md    ranked, with the biggest one first
+    docs/CACHE-POLICY-CEILING.md      Belady optimal: why the policy question is closed
+    docs/EXPERT-OFFLOAD-PLACEMENT.md  which layers to offload (unconfirmed, with retraction)
+    docs/DECODE-COMPUTE-BUDGET.md     what a decode step is made of; every bucket, closed
+    docs/ALL-REDUCE-CDNA2.md          custom all-reduce on gfx90a: it corrupts (superseded in part)
+    docs/P2P-PEER-HANDSHAKE.md        why the custom all-reduce cannot pay; GPU peer handshakes
     LEDGER.md              the full experiment log, ~3000 lines, including dead ends
 
     patches/               code changes, all behind default-on env gates
