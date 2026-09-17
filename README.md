@@ -34,7 +34,10 @@ read nothing else, read rules 1 and 2:
     docs/EXPERT-OFFLOAD-PLACEMENT.md  which layers to offload (unconfirmed, with retraction)
     docs/DECODE-COMPUTE-BUDGET.md     what a decode step is made of; every bucket, closed
     docs/ALL-REDUCE-CDNA2.md          custom all-reduce on gfx90a: it corrupts (superseded in part)
-    docs/P2P-PEER-HANDSHAKE.md        why the custom all-reduce cannot pay; GPU peer handshakes
+    docs/P2P-PEER-HANDSHAKE.md        why peer-VRAM handshakes fail on CDNA2 over PCIe
+    docs/HOSTAR-INTEGRATION.md        the all-reduce that DOES work: +5%, and why not more
+    docs/PCIE-FINE-GRAIN-TRACE.md     HSA_FORCE_FINE_GRAIN_PCIE: no effect, and why
+    hostar/                           host-staged all-reduce: kernel, plugin, build script
     LEDGER.md              the full experiment log, ~3000 lines, including dead ends
 
     patches/               code changes, all behind default-on env gates
