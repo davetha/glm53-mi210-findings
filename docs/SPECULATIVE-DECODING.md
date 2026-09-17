@@ -66,6 +66,30 @@ reasoning: 'The user wants me to answer with just the number. 2+2=4'
 Clean. So the expert cache is fine at 36 armed layers, eager mode is fine, the high offload
 is fine. **MTP is the variable.**
 
+### Second control: a RESIDENT draft is corrupted too
+
+The obvious suspect was the offload path: the draft's experts are BF16 read through a
+gather built for packed int4, and MTP shares the KV cache with the target, so a draft
+reading corrupted weights could poison the context the target then reads. That would look
+exactly like the observed output, and a merely low-quality draft would NOT (it just gets
+rejected).
+
+Tested by keeping layer 45 resident -- `OFFLOAD_GB=45` leaves it unoffloaded, and
+`SLOTS=20` frees the ~7.4 GB/rank it needs (52 -> 20 slots is ~5.2 GB, on top of ~3.3 GB
+already free). Confirmed resident by the arm line: `active on 26 MoE layer(s)`, identical
+to the standing config, so the offload set did not grow to include it.
+
+Result: **byte-identical garbage.**
+
+    content: 'Answer:\n\nA = answer. I need to respond. Hmm, how. I answered. Let me try again. Wait, I me...'
+
+Same opening string as the offloaded run. The offload path is eliminated. **MTP's
+verification is broken regardless of where the draft weights live.**
+
+(Note: `SLOTS` must be >= 16 with `SPEC_N=1`. The launcher's cache-bypass guard refuses
+`SLOTS=8`, because MTP doubles the decode step width to (1+SPEC_N) x TOP_K = 16 and a
+narrower cache would silently bypass, invalidating every number.)
+
 ## The acceptance rate does not clear the bar either
 
 From vLLM's own `SpecDecoding metrics` over ten reporting windows:
@@ -100,8 +124,17 @@ fixing the verification bug.
 3. **Acceptance would still need to beat ~1.3.** Even with a free resident draft, the draft
    forward pass and 2-token verification are not free.
 
-Steps 1 and 2 are both real work, to reach something that is currently break-even. That is
-why this is closed rather than parked.
+**Revised after the resident-draft control.** Acceptance measured with a resident draft is
+a clean 1.37-1.40 (~37-40%), consistent across both configurations. With a quantised
+resident draft there would be no gather and no offload, so the only added cost is the draft
+forward pass and 2-token verification -- plausibly ~1.2-1.3x the base step against 1.4
+acceptance. **That could win.**
+
+So the economics are no longer the blocker; the verification bug is, and it is unrelated to
+memory. Anyone reviving this should start by root-causing the corruption (candidates: a
+BF16 draft against an int4 target, or this MTP implementation against W4A16), not by
+optimising memory. Closed here because that root-cause work is open-ended and the payoff
+stays speculative until it is done.
 
 ## Related: DFlash
 
